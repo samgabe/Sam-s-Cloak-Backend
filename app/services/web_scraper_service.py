@@ -59,8 +59,10 @@ class WebScraperService:
                     return await self._scrape_generic(html_content, url)
                     
         except httpx.HTTPError as e:
+            print(f"DEBUG: HTTP error occurred: {str(e)}")
             raise AIServiceException(f"Failed to fetch job posting: {str(e)}")
         except Exception as e:
+            print(f"DEBUG: General error occurred: {str(e)}")
             raise AIServiceException(f"Failed to scrape job posting: {str(e)}")
     
     async def _scrape_linkedin(self, html: str, url: str) -> Dict[str, Any]:

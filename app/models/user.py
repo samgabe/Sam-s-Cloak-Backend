@@ -41,7 +41,7 @@ class User(UserBase, table=True):
 
 class UserCreate(UserBase):
     """User creation schema."""
-    password: str = Field(min_length=8, max_length=255)
+    password: str = Field(min_length=8, max_length=72)  # Max 72 bytes for bcrypt compatibility
 
 
 class UserUpdate(SQLModel):

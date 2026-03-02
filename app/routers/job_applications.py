@@ -74,12 +74,12 @@ async def ingest_job_posting(
     job_service: JobApplicationService = Depends(get_job_service)
 ):
     """
-    Ingest job posting from screenshot/image.
+    Ingest job posting from screenshot/image or PDF.
     
-    Upload a job posting screenshot and automatically extract job details using OCR,
+    Upload a job posting screenshot or PDF and automatically extract job details using OCR/PDF extraction,
     then perform AI analysis to match against the user's resume.
     
-    - **file**: Job posting screenshot (PNG, JPG, JPEG, WebP)
+    - **file**: Job posting screenshot (PNG, JPG, JPEG, WebP) or PDF
     - **token**: JWT authentication token
     - **job_title**: Optional job title override
     - **company_name**: Optional company name override
@@ -90,8 +90,15 @@ async def ingest_job_posting(
     """
     try:
         # Validate file
-        if not file.content_type or not file.content_type.startswith('image/'):
-            raise FileUploadException("File must be an image")
+        if not file.content_type:
+            raise FileUploadException("File content type is required")
+        
+        # Check if it's an image or PDF
+        is_image = file.content_type.startswith('image/')
+        is_pdf = file.content_type == 'application/pdf'
+        
+        if not is_image and not is_pdf:
+            raise FileUploadException("File must be an image or PDF")
         
         if file.size and file.size > settings.max_file_size:
             raise FileUploadException(f"File size exceeds limit of {settings.max_file_size} bytes")

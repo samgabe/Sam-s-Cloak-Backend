@@ -1,7 +1,8 @@
 """API routes for user management."""
 
 from typing import Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, status, Body, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -135,6 +136,131 @@ async def update_master_resume(
         return {"message": "Master resume updated successfully"}
     except DatabaseException as e:
         raise HTTPException(status_code=500, detail="Failed to update resume")
+
+
+@router.post("/me/resume/upload")
+async def upload_master_resume(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    user_repo: UserRepository = Depends(get_user_repo)
+):
+    """
+    Upload and parse a resume file.
+    
+    Supports PDF, DOCX, and image files. Extracts text content using OCR/PDF parsing
+    and stores it as the user's master resume.
+    """
+    try:
+        # Validate file type
+        allowed_types = [
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # DOCX
+            "image/png", "image/jpeg", "image/webp"
+        ]
+        
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported file type: {file.content_type}. Supported types: PDF, DOCX, PNG, JPG, WebP"
+            )
+        
+        # Validate file size (10MB max)
+        max_size = 10 * 1024 * 1024  # 10MB
+        file_content = await file.read()
+        
+        if len(file_content) > max_size:
+            raise HTTPException(
+                status_code=400,
+                detail="File too large. Maximum size is 10MB"
+            )
+        
+        # Extract text from file
+        if file.content_type == "application/pdf":
+            text_content = await extract_pdf_text(file_content)
+        elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            text_content = await extract_docx_text(file_content)
+        else:  # Image files
+            text_content = await extract_image_text(file_content)
+        
+        # Store as master resume
+        resume_data = {
+            "text": text_content,
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "uploaded_at": datetime.utcnow().isoformat()
+        }
+        
+        await user_repo.update_master_resume(
+            user_id=current_user.id,
+            resume_data=resume_data
+        )
+        
+        return {
+            "message": "Resume uploaded successfully",
+            "filename": file.filename,
+            "content_length": len(text_content),
+            "preview": text_content[:500] + "..." if len(text_content) > 500 else text_content
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload resume: {str(e)}")
+
+
+async def extract_pdf_text(file_content: bytes) -> str:
+    """Extract text from PDF file."""
+    try:
+        import PyPDF2
+        from io import BytesIO
+        
+        pdf_file = BytesIO(file_content)
+        reader = PyPDF2.PdfReader(pdf_file)
+        
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+        
+        return text.strip()
+    except Exception as e:
+        raise Exception(f"PDF extraction failed: {str(e)}")
+
+
+async def extract_docx_text(file_content: bytes) -> str:
+    """Extract text from DOCX file."""
+    try:
+        import docx
+        from io import BytesIO
+        
+        doc_file = BytesIO(file_content)
+        doc = docx.Document(doc_file)
+        
+        text = ""
+        for paragraph in doc.paragraphs:
+            text += paragraph.text + "\n"
+        
+        return text.strip()
+    except Exception as e:
+        raise Exception(f"DOCX extraction failed: {str(e)}")
+
+
+async def extract_image_text(file_content: bytes) -> str:
+    """Extract text from image file using OCR."""
+    try:
+        import pytesseract
+        from PIL import Image
+        from io import BytesIO
+        
+        image = Image.open(BytesIO(file_content))
+        
+        # Configure tesseract path if needed
+        if hasattr(pytesseract, 'pytesseract'):
+            pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+        
+        text = pytesseract.image_to_string(image)
+        return text.strip()
+    except Exception as e:
+        raise Exception(f"OCR extraction failed: {str(e)}")
 
 
 @router.put("/me/preferences")

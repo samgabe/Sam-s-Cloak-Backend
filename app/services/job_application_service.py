@@ -10,6 +10,7 @@ from app.repositories.user_repository import UserRepository
 from app.services.ocr_service import OCRService
 from app.services.ai_service import OptimizationEngine
 from app.services.web_scraper_service import WebScraperService
+from app.services.pdf_service import PDFService
 from app.utils.exceptions import (
     DatabaseException, 
     OCRException, 
@@ -32,6 +33,7 @@ class JobApplicationService:
         self.ocr_service = OCRService()
         self.ai_engine = OptimizationEngine()
         self.web_scraper = WebScraperService()
+        self.pdf_service = PDFService()
     
     async def ingest_job_posting(
         self, 
@@ -42,16 +44,16 @@ class JobApplicationService:
         additional_data: Optional[Dict[str, Any]] = None
     ) -> JobApplication:
         """
-        Ingest job posting from screenshot/image.
+        Ingest job posting from screenshot/image or PDF.
         
         Args:
             user_id: User ID
-            image_bytes: Image data
+            image_bytes: Image or PDF data
             filename: Original filename
             additional_data: Additional job metadata
             
         Returns:
-            Created job application with OCR and AI analysis
+            Created job application with OCR/PDF extraction and AI analysis
             
         Raises:
             ValidationException: If input validation fails
@@ -66,19 +68,28 @@ class JobApplicationService:
             if not user:
                 raise ValidationException(f"User with id {user_id} not found")
             
-            # Validate file
-            if not validate_file_extension(filename, settings.allowed_extensions_set):
-                raise FileUploadException(f"Invalid file type: {filename}")
+            # Check if file is PDF
+            is_pdf = self.pdf_service.is_pdf_file(filename)
             
-            # Extract text using OCR
-            ocr_result = await self.ocr_service.extract_structured_data(image_bytes)
-            raw_text = ocr_result["raw_text"]
-            extracted_data = ocr_result["extracted_data"]
-            
-            # Validate OCR quality
-            is_valid_quality, confidence = await self.ocr_service.validate_ocr_quality(image_bytes)
-            if not is_valid_quality:
-                raise OCRException(f"Low OCR quality: {confidence:.1f}% confidence")
+            if is_pdf:
+                # Extract text from PDF
+                pdf_result = await self.pdf_service.extract_text_from_pdf(image_bytes)
+                raw_text = pdf_result["raw_text"]
+                extracted_data = {}
+            else:
+                # Validate image file
+                if not validate_file_extension(filename, settings.allowed_extensions_set):
+                    raise FileUploadException(f"Invalid file type: {filename}")
+                
+                # Extract text using OCR
+                ocr_result = await self.ocr_service.extract_structured_data(image_bytes)
+                raw_text = ocr_result["raw_text"]
+                extracted_data = ocr_result["extracted_data"]
+                
+                # Validate OCR quality
+                is_valid_quality, confidence = await self.ocr_service.validate_ocr_quality(image_bytes)
+                if not is_valid_quality:
+                    raise OCRException(f"Low OCR quality: {confidence:.1f}% confidence")
             
             # Extract job metadata using AI
             job_metadata = await self.ai_engine.extract_job_metadata(raw_text)
@@ -313,8 +324,11 @@ class JobApplicationService:
             
             # Get user's master resume
             user = await self.user_repo.get(id=user_id)
-            if not user or not user.master_resume:
-                raise ValidationException("User master resume not found")
+            if not user:
+                raise ValidationException(f"User with id {user_id} not found")
+            
+            if not user.master_resume:
+                raise ValidationException("Please upload your master resume first before generating tailored resumes")
             
             # Prepare company info
             company_info = {

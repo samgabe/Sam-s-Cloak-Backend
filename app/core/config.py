@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     
     # File Upload
     max_file_size: int = 10 * 1024 * 1024  # 10MB
-    allowed_extensions: str = ".png,.jpg,.jpeg,.webp"  # Changed from set to str
+    allowed_extensions: str = ".png,.jpg,.jpeg,.webp,.pdf"  # Changed from set to str
     
     # OCR
     tesseract_cmd: str = "/usr/bin/tesseract"
