@@ -24,36 +24,36 @@ env/
 ENV/
 
 # Backend
-backend/.env
-backend/ .env.example
-backend/alembic/versions/*.pyc
-backend/*.log
-backend/.pytest_cache/
-backend/.coverage
-backend/htmlcov/
+.env
+.env.example
+alembic/versions/*.pyc
+*.log
+.pytest_cache/
+.coverage
+/htmlcov/
 
 # Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/.env.local
-frontend/.env.*.local
-frontend/npm-debug.log*
-frontend/yarn-debug.log*
-frontend/yarn-error.log*
+# frontend/node_modules/
+# frontend/dist/
+# frontend/.vite/
+# frontend/.env.local
+# frontend/.env.*.local
+# frontend/npm-debug.log*
+# frontend/yarn-debug.log*
+# frontend/yarn-error.log*
 
 # Android
-android/.gradle/
-android/.idea/
-android/local.properties
-android/build/
-android/app/build/
-android/captures/
-android/*.iml
-android/*.apk
-android/*.aab
-android/app/release/
-android/app/debug/
+# android/.gradle/
+# android/.idea/
+# android/local.properties
+# android/build/
+# android/app/build/
+# android/captures/
+# android/*.iml
+# android/*.apk
+# android/*.aab
+# android/app/release/
+# android/app/debug/
 
 # IDE
 .vscode/
