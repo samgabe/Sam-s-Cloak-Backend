@@ -1,14 +1,23 @@
 """API routes for user management."""
 
-from typing import Dict, Any
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Body, File, UploadFile
+from enum import Enum
+from io import BytesIO
+from typing import Dict, Any
+
+from fastapi import APIRouter, Depends, HTTPException, status, Body, File, UploadFile, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.auth import get_current_user_id, get_current_user
+from app.core.auth import get_current_user
 from app.models.user import User, UserCreate, UserRead, UserUpdate
 from app.repositories.user_repository import UserRepository
+from app.services.document_export_service import (
+    DocumentExportService,
+    TemplateStyle,
+    ExportFormat,
+)
 from app.utils.security import create_access_token
 from app.utils.exceptions import DatabaseException, ValidationException
 
@@ -18,6 +27,25 @@ router = APIRouter()
 async def get_user_repo(session: AsyncSession = Depends(get_session)) -> UserRepository:
     """Get user repository instance."""
     return UserRepository(session)
+
+
+def get_export_service() -> DocumentExportService:
+    """Get document export service instance."""
+    return DocumentExportService()
+
+
+class TemplateStyleQuery(str, Enum):
+    """Query-friendly template style enum for resume export."""
+
+    ATS = "ats"
+    MODERN = "modern"
+
+
+class ExportFormatQuery(str, Enum):
+    """Query-friendly export format enum for resume export."""
+
+    PDF = "pdf"
+    DOCX = "docx"
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -148,7 +176,7 @@ async def upload_master_resume(
     Upload and parse a resume file.
     
     Supports PDF, DOCX, and image files. Extracts text content using OCR/PDF parsing
-    and stores it as the user's master resume.
+    and stores it as the user's master resume along with template information.
     """
     try:
         # Validate file type
@@ -175,19 +203,25 @@ async def upload_master_resume(
             )
         
         # Extract text from file
+        template_info = None
         if file.content_type == "application/pdf":
             text_content = await extract_pdf_text(file_content)
+            # Extract template information from PDF
+            from app.services.pdf_service import PDFService
+            pdf_service = PDFService()
+            template_info = await pdf_service.extract_template_info(file_content)
         elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             text_content = await extract_docx_text(file_content)
         else:  # Image files
             text_content = await extract_image_text(file_content)
         
-        # Store as master resume
+        # Store as master resume with template info
         resume_data = {
             "text": text_content,
             "filename": file.filename,
             "content_type": file.content_type,
-            "uploaded_at": datetime.utcnow().isoformat()
+            "uploaded_at": datetime.utcnow().isoformat(),
+            "template": template_info  # Store template styling information
         }
         
         await user_repo.update_master_resume(
@@ -199,6 +233,7 @@ async def upload_master_resume(
             "message": "Resume uploaded successfully",
             "filename": file.filename,
             "content_length": len(text_content),
+            "has_template": template_info is not None,
             "preview": text_content[:500] + "..." if len(text_content) > 500 else text_content
         }
         
@@ -278,3 +313,71 @@ async def update_preferences(
         return {"message": "Preferences updated successfully"}
     except DatabaseException as e:
         raise HTTPException(status_code=500, detail="Failed to update preferences")
+
+
+@router.get("/me/resume/export")
+async def export_master_resume(
+    fmt: ExportFormatQuery = Query(ExportFormatQuery.PDF, alias="format"),
+    template: TemplateStyleQuery = Query(TemplateStyleQuery.ATS),
+    current_user: User = Depends(get_current_user),
+    export_service: DocumentExportService = Depends(get_export_service),
+):
+    """
+    Export the user's master resume as a DOCX or PDF.
+
+    - **format**: `pdf` or `docx`
+    - **template**: `ats` (simple, ATS-friendly) or `modern`
+    """
+    if not current_user.master_resume:
+        raise HTTPException(
+            status_code=400,
+            detail="Master resume not found. Upload it first via /users/me/resume or /users/me/resume/upload.",
+        )
+
+    resume_data = current_user.master_resume
+    content = None
+    title = "Resume"
+
+    if isinstance(resume_data, dict):
+        for key in ("text", "content", "resume_text", "body"):
+            if key in resume_data and isinstance(resume_data[key], str):
+                content = resume_data[key]
+                break
+        if resume_data.get("filename"):
+            title = resume_data["filename"]
+    else:
+        content = str(resume_data)
+
+    if not content or not content.strip():
+        raise HTTPException(status_code=400, detail="Master resume content is empty.")
+
+    template_style = TemplateStyle(template.value)
+
+    if fmt == ExportFormatQuery.DOCX:
+        file_bytes = export_service.generate_docx(
+            title=title,
+            content_markdown=content,
+            full_name=current_user.full_name,
+            email=current_user.email,
+            template_style=template_style,
+            document_type="RESUME",
+        )
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        filename = "resume.docx"
+    else:
+        file_bytes = export_service.generate_pdf(
+            title=title,
+            content_markdown=content,
+            full_name=current_user.full_name,
+            email=current_user.email,
+            template_style=template_style,
+            document_type="RESUME",
+        )
+        media_type = "application/pdf"
+        filename = "resume.pdf"
+
+    return StreamingResponse(
+        BytesIO(file_bytes),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

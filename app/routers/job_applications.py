@@ -1,6 +1,7 @@
 """API routes for job applications."""
 
 from typing import List, Optional, Dict, Any
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +14,7 @@ from app.utils.exceptions import (
     FileUploadException,
     OCRException,
     AIServiceException,
-    DatabaseException
+    DatabaseException,
 )
 from app.core.auth import get_current_user_id
 from app.core.config import settings
@@ -247,11 +248,11 @@ async def tailor_resume(
     incorporating missing keywords and highlighting relevant experience.
     """
     try:
-        tailored_resume = await job_service.tailor_resume(
+        result = await job_service.tailor_resume(
             application_id=application_id,
             user_id=user_id
         )
-        return {"tailored_resume": tailored_resume}
+        return result
         
     except ValidationException as e:
         raise HTTPException(status_code=400, detail=e.message)
@@ -274,17 +275,45 @@ async def generate_cover_letter(
     job and company, highlighting relevant achievements and skills.
     """
     try:
-        cover_letter = await job_service.generate_cover_letter(
+        result = await job_service.generate_cover_letter(
             application_id=application_id,
             user_id=user_id
         )
-        return {"cover_letter": cover_letter}
+        return result
         
     except ValidationException as e:
         raise HTTPException(status_code=400, detail=e.message)
     except DatabaseException as e:
         raise HTTPException(status_code=500, detail="Database error")
     except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/applications/{application_id}/email")
+async def generate_application_email(
+    application_id: int,
+    user_id: int = Depends(get_current_user_id),
+    job_service: JobApplicationService = Depends(get_job_service),
+):
+    """
+    Generate a tailored application email (subject and body) for a job.
+
+    This endpoint returns a ready-to-send email payload you can paste into
+    Gmail/Outlook:
+    - **subject**: Email subject line
+    - **body**: Email body text
+    """
+    try:
+        email_payload = await job_service.generate_application_email(
+            application_id=application_id,
+            user_id=user_id,
+        )
+        return email_payload
+    except ValidationException as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    except DatabaseException:
+        raise HTTPException(status_code=500, detail="Database error")
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

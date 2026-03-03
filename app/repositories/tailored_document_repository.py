@@ -135,8 +135,9 @@ class TailoredDocumentRepository(BaseRepository[TailoredDocument]):
             
             next_version = 1
             if latest_doc:
-                # Deactivate previous version
-                await self.update(db_obj=latest_doc, obj_in={"is_active": False})
+                # Deactivate previous version (update in-place without commit)
+                latest_doc.is_active = False
+                self.session.add(latest_doc)
                 next_version = latest_doc.version + 1
             
             # Create new version
@@ -151,9 +152,19 @@ class TailoredDocumentRepository(BaseRepository[TailoredDocument]):
                 "is_active": True
             }
             
-            return await self.create(obj_in=document_data)
-        except DatabaseException:
-            raise
+            # Create and commit both changes together
+            db_obj = self.model(**document_data)
+            self.session.add(db_obj)
+            await self.session.commit()
+            await self.session.refresh(db_obj)
+            return db_obj
+        except Exception as e:
+            await self.session.rollback()
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"ERROR in create_new_version: {str(e)}")
+            print(f"Traceback: {error_details}")
+            raise DatabaseException(f"Failed to create new document version: {str(e)}")
     
     async def get_document_history(
         self, 

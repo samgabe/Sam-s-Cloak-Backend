@@ -55,7 +55,11 @@ class UserUpdate(SQLModel):
 class UserRead(UserBase):
     """User response schema."""
     id: int
+    email: str
+    full_name: Optional[str]
+    is_active: bool
+    is_superuser: bool
+    master_resume: Optional[Dict[str, Any]]
+    preferences: Optional[Dict[str, Any]]
     created_at: datetime
     updated_at: datetime
-    master_resume: Optional[Dict[str, Any]] = None
-    preferences: Optional[Dict[str, Any]] = None

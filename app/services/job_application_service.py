@@ -5,18 +5,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job_application import JobApplication, JobApplicationCreate, ApplicationStatus
 from app.models.user import User
+from app.models.tailored_document import DocumentType
 from app.repositories.job_application_repository import JobApplicationRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.tailored_document_repository import TailoredDocumentRepository
 from app.services.ocr_service import OCRService
 from app.services.ai_service import OptimizationEngine
 from app.services.web_scraper_service import WebScraperService
 from app.services.pdf_service import PDFService
 from app.utils.exceptions import (
-    DatabaseException, 
-    OCRException, 
+    DatabaseException,
+    OCRException,
     AIServiceException,
     ValidationException,
-    FileUploadException
+    FileUploadException,
 )
 from app.utils.security import sanitize_string, validate_file_extension
 from app.core.config import settings
@@ -24,12 +26,13 @@ from app.core.config import settings
 
 class JobApplicationService:
     """Service for job application business logic."""
-    
+
     def __init__(self, session: AsyncSession):
         """Initialize job application service."""
         self.session = session
         self.job_repo = JobApplicationRepository(session)
         self.user_repo = UserRepository(session)
+        self.document_repo = TailoredDocumentRepository(session)
         self.ocr_service = OCRService()
         self.ai_engine = OptimizationEngine()
         self.web_scraper = WebScraperService()
@@ -253,7 +256,7 @@ class JobApplicationService:
         *, 
         application_id: int,
         user_id: int
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         Generate tailored resume for a job application.
         
@@ -262,7 +265,9 @@ class JobApplicationService:
             user_id: User ID (for authorization)
             
         Returns:
-            Tailored resume in Markdown format
+            Dict with:
+            - tailored_resume: Markdown content
+            - document_id: ID of stored TailoredDocument version
         """
         try:
             # Get application and verify ownership
@@ -289,12 +294,33 @@ class JobApplicationService:
                 job_description=application.job_description,
                 analysis_result=application.ai_analysis
             )
-            
-            return tailored_resume
+
+            # Persist as a new tailored document version
+            title = f"{application.job_title or 'Role'} - Tailored Resume"
+            document = await self.document_repo.create_new_version(
+                application_id=application_id,
+                user_id=user_id,
+                document_type=DocumentType.RESUME,
+                title=title,
+                content=tailored_resume,
+                doc_metadata={
+                    "source": "AI",
+                    "generated_from_application_id": application_id,
+                },
+            )
+
+            return {
+                "tailored_resume": tailored_resume,
+                "document_id": document.id,
+            }
             
         except (ValidationException, DatabaseException):
             raise
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"ERROR in tailor_resume: {str(e)}")
+            print(f"Traceback: {error_details}")
             raise DatabaseException(f"Resume tailoring failed: {str(e)}")
     
     async def generate_cover_letter(
@@ -311,7 +337,9 @@ class JobApplicationService:
             user_id: User ID (for authorization)
             
         Returns:
-            Cover letter in Markdown format
+            Dict with:
+            - cover_letter: Markdown content
+            - document_id: ID of stored TailoredDocument version
         """
         try:
             # Get application and verify ownership
@@ -343,13 +371,88 @@ class JobApplicationService:
                 job_description=application.job_description,
                 company_info=company_info
             )
-            
-            return cover_letter
+
+            # Persist as a new tailored document version
+            title = f"{application.job_title or 'Role'} - Cover Letter"
+            document = await self.document_repo.create_new_version(
+                application_id=application_id,
+                user_id=user_id,
+                document_type=DocumentType.COVER_LETTER,
+                title=title,
+                content=cover_letter,
+                doc_metadata={
+                    "source": "AI",
+                    "generated_from_application_id": application_id,
+                },
+            )
+
+            return {
+                "cover_letter": cover_letter,
+                "document_id": document.id,
+            }
             
         except (ValidationException, DatabaseException):
             raise
         except Exception as e:
             raise DatabaseException(f"Cover letter generation failed: {str(e)}")
+    
+    async def generate_application_email(
+        self,
+        *,
+        application_id: int,
+        user_id: int,
+    ) -> Dict[str, str]:
+        """
+        Generate a tailored application email (subject and body) for a job.
+
+        The email is designed to be ready to paste into your email client,
+        referencing the specific role and company.
+        """
+        try:
+            application = await self.job_repo.get(id=application_id)
+            if not application:
+                raise ValidationException(f"Job application with id {application_id} not found")
+
+            if application.user_id != user_id:
+                raise ValidationException("Unauthorized access to job application")
+
+            user = await self.user_repo.get(id=user_id)
+            if not user:
+                raise ValidationException(f"User with id {user_id} not found")
+
+            full_name = user.full_name or "Your Name"
+            job_title = application.job_title or "the advertised position"
+            company_name = application.company_name or "your company"
+
+            subject = f"Application for {job_title} - {full_name}"
+
+            # Use company name in greeting only if it looks like a person name is not provided
+            greeting = "Dear Hiring Manager,"
+
+            lines = [
+                greeting,
+                "",
+                f"I hope you are well. I am writing to express my interest in the {job_title} role at {company_name}.",
+                "Based on my experience and skills outlined in the attached tailored resume and cover letter,",
+                "I believe I can bring strong value to your team.",
+                "",
+                "Please find my resume and cover letter attached for your review.",
+                "I would be grateful for the opportunity to discuss how my background aligns with your needs.",
+                "",
+                "Thank you for your time and consideration.",
+                "",
+                "Best regards,",
+                full_name,
+                user.email,
+            ]
+
+            body = "\n".join(lines)
+            return {"subject": subject, "body": body}
+
+        except (ValidationException, DatabaseException):
+            raise
+        except Exception as e:
+            raise DatabaseException(f"Application email generation failed: {str(e)}")
     
     async def get_application_with_analysis(
         self, 
